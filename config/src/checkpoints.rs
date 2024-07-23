@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ethers::types::H256;
-use eyre::Result;
+use eyre::{Report, Result};
 use retri::{retry, BackoffSettings};
 use serde::{
     de::{self, Error},
@@ -9,6 +9,14 @@ use serde::{
 };
 
 use crate::networks;
+
+use std::process::Command;
+use std::str;
+
+use httpmock::{MockServer, Method};
+
+use reqwest::{Client, Response, StatusCode};
+
 
 /// The location where the list of checkpoint services are stored.
 pub const CHECKPOINT_SYNC_SERVICES_LIST: &str = "https://raw.githubusercontent.com/ethpandaops/checkpoint-sync-health-checks/master/_data/endpoints.yaml";
@@ -80,11 +88,53 @@ pub struct CheckpointFallback {
 }
 
 async fn get(req: &str) -> Result<reqwest::Response> {
-    retry(
-        || async { Ok::<_, eyre::Report>(reqwest::get(req).await?) },
-        BackoffSettings::default(),
-    )
-    .await
+    // Execute curl to fetch the data
+    let output = Command::new("curl")
+        .arg("-i")
+        .arg(req)
+        .output()
+        .map_err(|e| eyre::Report::new(e))?;
+
+    if !output.status.success() {
+        let error_message = str::from_utf8(&output.stderr)?;
+        return Err(eyre::Report::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Curl failed: {}", error_message),
+        )));
+    }
+
+    // Parse headers and body from curl output
+    let output_str = str::from_utf8(&output.stdout)?;
+    let parts: Vec<&str> = output_str.split("\r\n\r\n").collect();
+    let headers_body = parts.split_first().ok_or_else(|| {
+        eyre::Report::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Invalid response from curl"
+        ))
+    })?;    
+    println!("Debug output_str: {}", output_str);
+    let headers = headers_body.0;
+    let body = headers_body.1.join("\r\n\r\n");
+
+    // Setup a mock server to create a reqwest::Response
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(Method::GET)
+            .path("/mock");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(body);
+    });
+
+    // Use reqwest to get the response from the mock server
+    let client = Client::new();
+    let response = client.get(server.url("/mock"))
+        .send()
+        .await
+        .map_err(|e| Report::new(e))?;
+
+    mock.assert();
+    Ok(response)
 }
 
 impl CheckpointFallback {

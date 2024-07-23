@@ -10,19 +10,46 @@ use crate::constants::MAX_REQUEST_LIGHT_CLIENT_UPDATES;
 use crate::types::*;
 use common::errors::RpcError;
 
+use std::process::Command;
+
 #[derive(Debug)]
 pub struct NimbusRpc {
     rpc: String,
 }
 
 async fn get<R: DeserializeOwned>(req: &str) -> Result<R> {
-    let bytes = retry(
-        || async { Ok::<_, eyre::Report>(reqwest::get(req).await?.bytes().await?) },
-        BackoffSettings::default(),
-    )
-    .await?;
+    // Execute curl to fetch the data asynchronously
+    let output = Command::new("curl")
+        .arg("-s")  // Silent mode to not include progress meter or error messages
+        .arg(req)
+        .output()
+        .map_err(|e| {
+            let error_message = format!("Failed to execute curl command: {}", e);
+            println!("{}", error_message);
+            eyre::Report::new(e)
+        })?;
 
-    Ok(serde_json::from_slice::<R>(&bytes)?)
+    if !output.status.success() {
+        let error_message = std::str::from_utf8(&output.stderr)
+            .unwrap_or("Failed to decode error message from stderr");
+        println!("Curl command failed: {}", error_message);
+        return Err(eyre::Report::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Curl failed: {}", error_message),
+        )));
+    }
+
+    // Parse the output, assuming the body is directly usable as the bytes of the JSON response
+    let bytes = &output.stdout;
+
+    // Deserialize JSON to the specified type
+    let result: R = serde_json::from_slice(bytes).map_err(|e| {
+        let error_message = format!("Failed to deserialize JSON response: {}", e);
+        println!("{}", error_message);
+        eyre::Report::new(e)
+    })?;
+
+    Ok(result)
 }
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
