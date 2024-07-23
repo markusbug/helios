@@ -253,7 +253,13 @@ pub fn holesky() -> BaseConfig {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn data_dir(network: Network) -> PathBuf {
-    home_dir()
-        .unwrap()
-        .join(format!(".helios/data/{}", network))
+    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+    {
+        PathBuf::from(format!("/data/lightclient/.helios/data/{}", network))
+    }
+
+    #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+    {
+        home_dir().expect("Home directory not found").join(format!(".helios/data/{}", network))
+    }
 }

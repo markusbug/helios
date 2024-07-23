@@ -85,11 +85,23 @@ fn register_shutdown_handler(client: Client<FileDB>) {
 fn get_config() -> Config {
     let cli = Cli::parse();
 
-    let config_path = home_dir().unwrap().join(".helios/helios.toml");
+    let config_path = get_config_path();
 
     let cli_config = cli.as_cli_config();
 
     Config::from_file(&config_path, &cli.network, &cli_config)
+}
+
+fn get_config_path() -> PathBuf {
+    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+    {
+        PathBuf::from("/data/lightclient/.helios/helios.toml")
+    }
+
+    #[cfg(not(all(target_os = "android", target_arch = "aarch64")))]
+    {
+        home_dir().expect("Home directory not found").join(".helios/helios.toml")
+    }
 }
 
 #[derive(Parser)]
